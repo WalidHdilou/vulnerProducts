@@ -8,19 +8,14 @@ const port = 8000;
 
 app.use(cors());
 
-// ---------------------------
-// SEQUELIZE INIT
-// ---------------------------
+
 
 const sequelize = new Sequelize({
   dialect: 'sqlite',
   storage: './database.db',
-  logging: false, // mets true pour voir les requêtes SQL
+  logging: false, 
 });
 
-// ---------------------------
-// MODELS
-// ---------------------------
 
 const User = sequelize.define('User', {
   id: { type: DataTypes.INTEGER, primaryKey: true, autoIncrement: true },
@@ -48,10 +43,6 @@ const Product = sequelize.define('Product', {
   tableName: 'products',
   timestamps: false,
 });
-
-// ---------------------------
-// FUNCTIONS: INSERT DATA
-// ---------------------------
 
 async function insertRandomUsers() {
   try {
@@ -102,9 +93,6 @@ async function insertProductsFromAPI() {
   }
 }
 
-// ---------------------------
-// ROUTES
-// ---------------------------
 
 app.get('/generate-users', async (req, res) => {
   try {
@@ -124,7 +112,7 @@ app.get('/generate-products', async (req, res) => {
   }
 });
 
-// SEARCH PRODUCTS (sécurisé, via ORM)
+
 app.get('/products/search', async (req, res) => {
   try {
     const searchTerm = req.query.q || '';
@@ -146,7 +134,7 @@ app.get('/products/search', async (req, res) => {
   }
 });
 
-// GET ALL PRODUCTS
+
 app.get('/products', async (req, res) => {
   try {
     const products = await Product.findAll();
@@ -157,7 +145,7 @@ app.get('/products', async (req, res) => {
   }
 });
 
-// GET ONE PRODUCT BY ID (sécurisé)
+
 app.get('/products/:id', async (req, res) => {
   try {
     const product = await Product.findByPk(req.params.id);
@@ -173,21 +161,18 @@ app.get('/products/:id', async (req, res) => {
   }
 });
 
-// ROOT
+
 app.get('/', (req, res) => {
   res.send('Hello Ipssi v2 with Sequelize!');
 });
 
-// ---------------------------
-// SERVER START (APRES SYNC)
-// ---------------------------
 
 (async () => {
   try {
     await sequelize.authenticate();
     console.log('Connected to SQLite via Sequelize.');
 
-    await sequelize.sync(); // crée les tables si elles n’existent pas
+    await sequelize.sync();
     console.log('Database synced.');
 
     app.listen(port, () => {
