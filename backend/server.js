@@ -1,41 +1,57 @@
-const express = require('express')
+const express = require('express');
 const cors = require('cors');
-
-const app = express()
 const axios = require('axios');
-const sqlite3 = require('sqlite3').verbose();
+const { Sequelize, DataTypes, Op } = require('sequelize');
 
-const port = 8000
+const app = express();
+const port = 8000;
 
+app.use(cors());
 
-app.use(cors())
+// ---------------------------
+// SEQUELIZE INIT
+// ---------------------------
 
-const db = new sqlite3.Database('./database.db', (err) => {
-    if (err) console.error(err.message);
-    else console.log('Connected to SQLite database.');
+const sequelize = new Sequelize({
+  dialect: 'sqlite',
+  storage: './database.db',
+  logging: false, // mets true pour voir les requêtes SQL
 });
 
+// ---------------------------
+// MODELS
+// ---------------------------
 
-db.run(`CREATE TABLE IF NOT EXISTS users (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
-  username TEXT UNIQUE NOT NULL,
-  email TEXT NOT NULL,
-  password TEXT NOT NULL,
-  is_admin INTEGER DEFAULT 0,
-  created_at DATETIME DEFAULT CURRENT_TIMESTAMP
-)`);
+const User = sequelize.define('User', {
+  id: { type: DataTypes.INTEGER, primaryKey: true, autoIncrement: true },
+  username: { type: DataTypes.TEXT, allowNull: false, unique: true },
+  email: { type: DataTypes.TEXT, allowNull: false },
+  password: { type: DataTypes.TEXT, allowNull: false },
+  is_admin: { type: DataTypes.INTEGER, defaultValue: 0 },
+}, {
+  tableName: 'users',
+  timestamps: true,
+  createdAt: 'created_at',
+  updatedAt: false,
+});
 
-db.run(`CREATE TABLE IF NOT EXISTS products (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
-  title TEXT NOT NULL,
-  description TEXT,
-  price REAL NOT NULL,
-  image TEXT,
-  category TEXT,
-  rating_rate REAL,
-  rating_count INTEGER
-)`);
+const Product = sequelize.define('Product', {
+  id: { type: DataTypes.INTEGER, primaryKey: true, autoIncrement: true },
+  title: { type: DataTypes.TEXT, allowNull: false },
+  description: { type: DataTypes.TEXT },
+  price: { type: DataTypes.REAL, allowNull: false },
+  image: { type: DataTypes.TEXT },
+  category: { type: DataTypes.TEXT },
+  rating_rate: { type: DataTypes.REAL },
+  rating_count: { type: DataTypes.INTEGER },
+}, {
+  tableName: 'products',
+  timestamps: false,
+});
 
+// ---------------------------
+// FUNCTIONS: INSERT DATA
+// ---------------------------
 
 async function insertRandomUsers() {
   try {
@@ -43,21 +59,23 @@ async function insertRandomUsers() {
     const results = await Promise.all(urls);
     const users = results.map(r => r.data.results[0]);
 
-    users.forEach(u => {
+    for (const u of users) {
       const username = u.login.username;
       const password = u.login.password;
       const email = u.email;
 
-      db.run(
-        `INSERT INTO users (username, email, password, is_admin) VALUES ('${username}', '${email}', '${password}', 0)`,
-        (err) => {
-          if (err) console.error(err.message);
-        }
-      );
-    });
+      await User.create({
+        username,
+        email,
+        password,
+        is_admin: 0,
+      });
+    }
+
     console.log('Inserted 5 random users into database.');
   } catch (err) {
     console.error('Error inserting users:', err.message);
+    throw err;
   }
 }
 
@@ -66,84 +84,116 @@ async function insertProductsFromAPI() {
     const response = await axios.get('https://fakestoreapi.com/products');
     const products = response.data;
 
-    products.forEach(p => {
-      const title = p.title.replace(/'/g, "''");
-      const description = p.description.replace(/'/g, "''");
-      const category = p.category.replace(/'/g, "''");
-      
-      db.run(
-        `INSERT INTO products (title, description, price, image, category, rating_rate, rating_count) 
-         VALUES (?, ?, ?, ?, ?, ?, ?)`,
-        [title, description, p.price, p.image, category, p.rating.rate, p.rating.count],
-        (err) => {
-          if (err) console.error('Error inserting product:', err.message);
-        }
-      );
-    });
-    
+    const data = products.map(p => ({
+      title: p.title,
+      description: p.description,
+      price: p.price,
+      image: p.image,
+      category: p.category,
+      rating_rate: p.rating.rate,
+      rating_count: p.rating.count,
+    }));
+
+    await Product.bulkCreate(data);
     console.log(`Inserted ${products.length} products into database.`);
   } catch (err) {
     console.error('Error fetching products:', err.message);
+    throw err;
   }
 }
 
+// ---------------------------
+// ROUTES
+// ---------------------------
 
 app.get('/generate-users', async (req, res) => {
-  await insertRandomUsers();
-  res.json({ success: true, message: 'Generated 5 random users' });
+  try {
+    await insertRandomUsers();
+    res.json({ success: true, message: 'Generated 5 random users' });
+  } catch (err) {
+    res.status(500).json({ error: 'Error generating users' });
+  }
 });
 
 app.get('/generate-products', async (req, res) => {
-    await insertProductsFromAPI()
-    res.send('products generated')
-})
+  try {
+    await insertProductsFromAPI();
+    res.send('products generated');
+  } catch (err) {
+    res.status(500).json({ error: 'Error generating products' });
+  }
+});
 
+// SEARCH PRODUCTS (sécurisé, via ORM)
+app.get('/products/search', async (req, res) => {
+  try {
+    const searchTerm = req.query.q || '';
 
-app.get('/products/search', (req, res) => {
-  const searchTerm = req.query.q || '';
+    const products = await Product.findAll({
+      where: {
+        [Op.or]: [
+          { title: { [Op.like]: `%${searchTerm}%` } },
+          { description: { [Op.like]: `%${searchTerm}%` } },
+          { category: { [Op.like]: `%${searchTerm}%` } },
+        ],
+      },
+    });
 
-  console.log(req.query.q);
-  
-  
-  const query = `SELECT * FROM products WHERE title LIKE '%${searchTerm}%' OR description LIKE '%${searchTerm}%' OR category LIKE '%${searchTerm}%'`;
-  
-  console.log('Search query:', query);
-  
-  db.all(query, [], (err, rows) => {
-    if (err) {
-      console.error('SQL Error:', err.message);
-      return res.status(500).json({ error: err.message });
+    res.json(products);
+  } catch (err) {
+    console.error('Search error:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// GET ALL PRODUCTS
+app.get('/products', async (req, res) => {
+  try {
+    const products = await Product.findAll();
+    res.json(products);
+  } catch (err) {
+    console.error('Error fetching products:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// GET ONE PRODUCT BY ID (sécurisé)
+app.get('/products/:id', async (req, res) => {
+  try {
+    const product = await Product.findByPk(req.params.id);
+
+    if (!product) {
+      return res.status(404).json({ error: 'Product not found' });
     }
-    res.json(rows);
-  });
+
+    res.json(product);
+  } catch (err) {
+    console.error('Error fetching product:', err);
+    res.status(500).json({ error: err.message });
+  }
 });
 
-app.get('/products', (req, res) => {
-    db.all('SELECT * FROM products', [], (err, rows) => {
-        if (err)
-            return res.status(500).json({error : err.message})
-        res.json(rows)
-    });
-});
-
-app.get('/products/:id', (req, res) => {
-    const productId = req.params.id
-
-    const query = `SELECT * FROM products WHERE id = ${productId}`;
-
-    db.get(query, [], (err, rows) => {
-        if (err)
-            return res.status(500).json({error : err.message})
-        res.json(rows || {})
-    });
-})
-
+// ROOT
 app.get('/', (req, res) => {
-    res.send('Hello Ipssi v2!')
-})
+  res.send('Hello Ipssi v2 with Sequelize!');
+});
 
+// ---------------------------
+// SERVER START (APRES SYNC)
+// ---------------------------
 
+(async () => {
+  try {
+    await sequelize.authenticate();
+    console.log('Connected to SQLite via Sequelize.');
 
-app.listen(port, () => {
-    console.log(`Example app listening on port ${port}`)
-})
+    await sequelize.sync(); // crée les tables si elles n’existent pas
+    console.log('Database synced.');
+
+    app.listen(port, () => {
+      console.log(`Example app listening on port ${port}`);
+    });
+  } catch (err) {
+    console.error('Unable to start server:', err);
+  }
+})();
